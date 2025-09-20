@@ -5,7 +5,7 @@ import datetime
 app = Flask(__name__)
 DB_FILE = "daydream_sydney.db"
 
-# --- Database init with schema ---
+# --- Initialize DB with schema ---
 def init_db():
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
@@ -114,6 +114,17 @@ def list_users():
     conn.close()
     return jsonify([{"id": r[0], "name": r[1], "email": r[2], "created_at": r[3], "updated_at": r[4]} for r in rows])
 
+@app.route("/users/<user_id>", methods=["GET"])
+def get_user(user_id):
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("SELECT id, name, email, created_at, updated_at FROM users WHERE id=?", (user_id,))
+    row = c.fetchone()
+    conn.close()
+    if not row:
+        return jsonify({"status": "error", "message": "User not found"}), 404
+    return jsonify({"id": row[0], "name": row[1], "email": row[2], "created_at": row[3], "updated_at": row[4]})
+
 # --- STARS ---
 @app.route("/stars", methods=["POST"])
 def create_star():
@@ -138,6 +149,30 @@ def list_stars(user_id):
     conn.close()
     return jsonify([{"id": r[0], "user_id": r[1], "created_at": r[2]} for r in rows])
 
+@app.route("/stars/<star_id>", methods=["DELETE"])
+def delete_star(star_id):
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("DELETE FROM stars WHERE id=?", (star_id,))
+    if c.rowcount == 0:
+        conn.close()
+        return jsonify({"status": "error", "message": "Star not found"}), 404
+    conn.commit()
+    conn.close()
+    log_action("DELETE", "stars", f"Star {star_id} deleted")
+    return jsonify({"status": "ok"})
+
+@app.route("/users/<user_id>/stars", methods=["DELETE"])
+def delete_user_stars(user_id):
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("DELETE FROM stars WHERE user_id=?", (user_id,))
+    deleted_count = c.rowcount
+    conn.commit()
+    conn.close()
+    log_action("DELETE", "stars", f"{deleted_count} stars deleted for user {user_id}")
+    return jsonify({"status": "ok", "deleted": deleted_count})
+
 # --- NFC TAGS ---
 @app.route("/nfc", methods=["POST"])
 def create_nfc():
@@ -161,6 +196,36 @@ def list_nfc(user_id):
     rows = c.fetchall()
     conn.close()
     return jsonify([{"tag_id": r[0], "user_id": r[1], "created_at": r[2], "updated_at": r[3]} for r in rows])
+
+@app.route("/nfc/<tag_id>", methods=["DELETE"])
+def unlink_nfc(tag_id):
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("DELETE FROM nfc_tags WHERE tag_id=?", (tag_id,))
+    if c.rowcount == 0:
+        conn.close()
+        return jsonify({"status": "error", "message": "Tag not found"}), 404
+    conn.commit()
+    conn.close()
+    log_action("DELETE", "nfc_tags", f"Tag {tag_id} unlinked")
+    return jsonify({"status": "ok"})
+
+@app.route("/nfc/<tag_id>/user", methods=["GET"])
+def get_user_by_nfc(tag_id):
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("SELECT user_id FROM nfc_tags WHERE tag_id=?", (tag_id,))
+    row = c.fetchone()
+    if not row:
+        conn.close()
+        return jsonify({"status": "error", "message": "Tag not found"}), 404
+    user_id = row[0]
+    c.execute("SELECT id, name, email, created_at, updated_at FROM users WHERE id=?", (user_id,))
+    user = c.fetchone()
+    conn.close()
+    if not user:
+        return jsonify({"status": "error", "message": "User not found"}), 404
+    return jsonify({"id": user[0], "name": user[1], "email": user[2], "created_at": user[3], "updated_at": user[4]})
 
 # --- AUDIT LOGS ---
 @app.route("/audit", methods=["GET"])
