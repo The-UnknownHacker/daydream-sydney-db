@@ -1,13 +1,32 @@
-version: '3.9'
+version: '3.8'
 
 services:
-  daydream-backend:
-    image: python:3.12-slim
-    container_name: daydream_backend
-    working_dir: /          # container runs commands from root
-    volumes:
-      - ./:/               # map your repo root to /root in container
+  beta-bob:
+    build: .
+    container_name: daydream-sydney
+    ports:
+      - "1234:1234"
     environment:
-      FLASK_ENV: production
-    command: sh -c "pip install --no-cache-dir flask && python main.py"
-    ports: 
+      - PORT=1234
+      - DOMAIN=sydney.aaravjhamb.com
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:1234/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    labels:
+      # Coolify labels for domain and SSL
+      - "coolify.managed=true"
+      - "traefik.enable=true"
+      - "traefik.http.routers.beta-bob.rule=Host(`sydney.aaravjhamb.com`)"
+      - "traefik.http.routers.beta-bob.entrypoints=websecure"
+      - "traefik.http.routers.beta-bob.tls.certresolver=letsencrypt"
+      - "traefik.http.services.beta-bob.loadbalancer.server.port=5000"
+    networks:
+      - coolify
+
+networks:
+  coolify:
+    external: true
