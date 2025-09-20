@@ -1,0 +1,16 @@
+version: '3.9'
+
+services:
+  daydream-backend:
+    image: python:3.12-slim
+    container_name: daydream_backend
+    working_dir: /app
+    volumes:
+      - ./:/app             # main.py is in root
+      - ./data:/app/data    # SQLite database persists here
+    environment:
+      FLASK_ENV: production
+    ports:
+      - "5000:5000"
+    command: >
+      sh -c "pip install --no-cache-dir flask && python main.py"
