@@ -1,7 +1,7 @@
 version: '3.8'
 
 services:
-  beta-bob:
+  daydream-sydney:
     build: .
     container_name: daydream-sydney
     ports:
@@ -20,10 +20,10 @@ services:
       # Coolify labels for domain and SSL
       - "coolify.managed=true"
       - "traefik.enable=true"
-      - "traefik.http.routers.beta-bob.rule=Host(`sydney.aaravjhamb.com`)"
-      - "traefik.http.routers.beta-bob.entrypoints=websecure"
-      - "traefik.http.routers.beta-bob.tls.certresolver=letsencrypt"
-      - "traefik.http.services.beta-bob.loadbalancer.server.port=5000"
+      - "traefik.http.routers.daydream-sydney.rule=Host(`sydney.aaravjhamb.com`)"
+      - "traefik.http.routers.daydream-sydney.entrypoints=websecure"
+      - "traefik.http.routers.daydream-sydney.tls.certresolver=letsencrypt"
+      - "traefik.http.services.daydream-sydney.loadbalancer.server.port=5000"
     networks:
       - coolify
 
