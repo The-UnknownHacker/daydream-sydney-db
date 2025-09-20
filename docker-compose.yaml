@@ -4,9 +4,10 @@ services:
   daydream-backend:
     image: python:3.12-slim
     container_name: daydream_backend
-    working_dir: /root          # container runs commands from root
+    working_dir: /          # container runs commands from root
     volumes:
-      - ./:/root               # map your repo root to /root in container
+      - ./:/               # map your repo root to /root in container
     environment:
       FLASK_ENV: production
     command: sh -c "pip install --no-cache-dir flask && python main.py"
+    ports: 
