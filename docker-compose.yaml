@@ -11,6 +11,6 @@ services:
     environment:
       FLASK_ENV: production
     ports:
-      - "5000:5000"
+      - "1234:5000"
     command: >
       sh -c "pip install --no-cache-dir flask && python main.py"
