@@ -173,4 +173,4 @@ def audit():
     return jsonify([{"id": r[0], "action": r[1], "table": r[2], "details": r[3], "timestamp": r[4]} for r in rows])
 
 if __name__ == "__main__":
-    app.run(host='0.0.0.0', port=1234, debug=debug_mode)
+    app.run(host='0.0.0.0', port=1234)
