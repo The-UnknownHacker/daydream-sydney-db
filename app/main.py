@@ -3,10 +3,27 @@ from flask_cors import CORS
 import sqlite3
 import datetime
 import traceback
+import os
 
 app = Flask(__name__)
-# Enable CORS for all routes to allow access from iOS app
-CORS(app)
+
+# Configure CORS more explicitly
+cors = CORS(app, resources={
+    r"/*": {
+        "origins": "*",  # Allow all origins (development mode)
+        "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+        "allow_headers": ["Content-Type", "Authorization", "Accept"]
+    }
+})
+
+# Add CORS headers to all responses
+@app.after_request
+def add_cors_headers(response):
+    response.headers['Access-Control-Allow-Origin'] = '*'
+    response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
+    response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, Accept'
+    return response
+
 DB_FILE = "daydream_sydney.db"
 
 # Global error handling
@@ -106,22 +123,86 @@ def log_action(action, table, details=""):
     conn.commit()
     conn.close()
 
+# Function to add sample data if tables are empty
+def populate_sample_data():
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    
+    # Check if users table is empty
+    c.execute("SELECT COUNT(*) FROM users")
+    user_count = c.fetchone()[0]
+    
+    if user_count == 0:
+        print("Adding sample users...")
+        # Add a sample user
+        sample_user_id = "8472A92D-C6D5-4014-82FE-9D47348DAE24"  # This matches the ID in your logs
+        c.execute("INSERT INTO users (id, name, email) VALUES (?, ?, ?)",
+                  (sample_user_id, "Sample User", "sample@example.com"))
+        
+        # Add some sample stars for this user
+        for i in range(5):
+            star_id = f"star_{i}_{sample_user_id[:8]}"
+            c.execute("INSERT INTO stars (id, user_id) VALUES (?, ?)",
+                      (star_id, sample_user_id))
+        
+        # Add a sample NFC tag linked to this user
+        c.execute("INSERT INTO nfc_tags (tag_id, user_id) VALUES (?, ?)",
+                  ("04BC777A7B1190", sample_user_id))  # This matches the NFC tag ID in your logs
+        
+        conn.commit()
+        print("Sample data added successfully")
+    
+    conn.close()
+
 init_db()
+populate_sample_data()
 
 # --- USERS ---
 @app.route("/users", methods=["POST"])
 def create_user():
     data = request.json
     try:
+        # Log the incoming data for debugging
+        print(f"Create user request received: {data}")
+        
+        # Check if all required fields are present
+        required_fields = ["id", "name", "email"]
+        for field in required_fields:
+            if field not in data:
+                error_msg = f"Missing required field: {field}"
+                print(error_msg)
+                return jsonify({"status": "error", "message": error_msg}), 400
+        
         conn = sqlite3.connect(DB_FILE)
         c = conn.cursor()
+        
+        # Check if email already exists
+        c.execute("SELECT id FROM users WHERE email=?", (data["email"],))
+        existing_user = c.fetchone()
+        if existing_user:
+            conn.close()
+            error_msg = f"Email already exists: {data['email']}"
+            print(error_msg)
+            return jsonify({"status": "error", "message": error_msg}), 400
+        
+        # Insert the new user
         c.execute("INSERT INTO users (id, name, email) VALUES (?, ?, ?)",
                   (data["id"], data["name"], data["email"]))
         conn.commit()
+        
+        # Fetch the created user to return
+        c.execute("SELECT id, name, email, created_at, updated_at FROM users WHERE id=?", (data["id"],))
+        user = c.fetchone()
         conn.close()
+        
         log_action("INSERT", "users", f"User {data['id']} created")
-        return jsonify({"status": "ok"}), 201
+        print(f"User created successfully: {data['id']}")
+        
+        # Return the created user object
+        return jsonify({"id": user[0], "name": user[1], "email": user[2], 
+                        "created_at": user[3], "updated_at": user[4]}), 201
     except Exception as e:
+        print(f"Error creating user: {str(e)}")
         return jsonify({"status": "error", "message": str(e)}), 400
 
 @app.route("/users", methods=["GET"])
@@ -290,17 +371,28 @@ def get_nfc_tag(tag_id):
 def get_user_by_nfc(tag_id):
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
+    
+    print(f"Looking up user for NFC tag: {tag_id}")
+    
     c.execute("SELECT user_id FROM nfc_tags WHERE tag_id=?", (tag_id,))
     row = c.fetchone()
     if not row:
         conn.close()
+        print(f"NFC tag not found: {tag_id}")
         return jsonify({"status": "error", "message": "Tag not found"}), 404
+        
     user_id = row[0]
+    print(f"Found user_id: {user_id} for tag: {tag_id}")
+    
     c.execute("SELECT id, name, email, created_at, updated_at FROM users WHERE id=?", (user_id,))
     user = c.fetchone()
     conn.close()
+    
     if not user:
+        print(f"User not found with ID: {user_id}")
         return jsonify({"status": "error", "message": "User not found"}), 404
+        
+    print(f"Returning user details for ID: {user_id}")
     return jsonify({"id": user[0], "name": user[1], "email": user[2], "created_at": user[3], "updated_at": user[4]})
 
 # --- AUDIT LOGS ---
@@ -333,5 +425,16 @@ def delete_user(user_id):
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 400
 
+# Simple health check endpoint
+@app.route("/health", methods=["GET"])
+def health_check():
+    return jsonify({
+        "status": "ok",
+        "timestamp": datetime.datetime.utcnow().isoformat(),
+        "api_version": "1.0.0"
+    })
+
 if __name__ == "__main__":
-    app.run(host='0.0.0.0', port=1234)
+    print("Starting Daydream Sydney API server...")
+    print(f"Database: {os.path.abspath(DB_FILE)}")
+    app.run(host='0.0.0.0', port=1234, debug=True)
