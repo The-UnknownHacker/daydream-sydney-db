@@ -149,10 +149,37 @@ def init_db():
             END;
         ''')
 
+        # Attendance table
+        c.execute('''
+            CREATE TABLE IF NOT EXISTS attendance (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                tag_id TEXT NOT NULL,
+                user_id TEXT,
+                status TEXT NOT NULL DEFAULT 'absent',
+                date TEXT NOT NULL DEFAULT (DATE('now')),
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+                FOREIGN KEY (tag_id) REFERENCES nfc_tags(tag_id) ON DELETE CASCADE,
+                UNIQUE(tag_id, date)
+            )
+        ''')
+
+        # Trigger for attendance.updated_at
+        c.execute('''
+            CREATE TRIGGER IF NOT EXISTS attendance_updated_at
+            AFTER UPDATE ON attendance
+            BEGIN
+                UPDATE attendance SET updated_at = CURRENT_TIMESTAMP WHERE id = NEW.id;
+            END;
+        ''')
+
         # Indexes
         c.execute('CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)')
         c.execute('CREATE INDEX IF NOT EXISTS idx_stars_user_created ON stars(user_id, created_at)')
         c.execute('CREATE INDEX IF NOT EXISTS idx_nfc_tags_user ON nfc_tags(user_id)')
+        c.execute('CREATE INDEX IF NOT EXISTS idx_attendance_tag_date ON attendance(tag_id, date)')
+        c.execute('CREATE INDEX IF NOT EXISTS idx_attendance_user_date ON attendance(user_id, date)')
 
         conn.commit()
         conn.close()
@@ -549,6 +576,152 @@ def get_user_by_nfc(tag_id):
         
     print(f"Returning user details for ID: {user_id}")
     return jsonify({"id": user[0], "name": user[1], "email": user[2], "created_at": user[3], "updated_at": user[4]})
+
+# --- ATTENDANCE ---
+@app.route("/attendance", methods=["POST"])
+def mark_attendance():
+    """Mark attendance for a user via NFC tag. Default is absent."""
+    data = request.json
+    try:
+        print(f"Attendance request received: {data}")
+        
+        # Validate required fields
+        if not data or "tag_id" not in data:
+            error_msg = "Missing required field: tag_id"
+            print(f"Error: {error_msg}")
+            return jsonify({"status": "error", "message": error_msg}), 400
+        
+        tag_id = data["tag_id"]
+        status = data.get("status", "absent")  # Default to absent
+        date = data.get("date", datetime.date.today().isoformat())  # Default to today
+        
+        # Validate status
+        if status not in ["present", "absent"]:
+            error_msg = "Status must be 'present' or 'absent'"
+            print(f"Error: {error_msg}")
+            return jsonify({"status": "error", "message": error_msg}), 400
+        
+        with db_lock:
+            conn = get_db_connection()
+            c = conn.cursor()
+            
+            # Get user_id from NFC tag
+            c.execute("SELECT user_id FROM nfc_tags WHERE tag_id=?", (tag_id,))
+            tag_row = c.fetchone()
+            if not tag_row:
+                conn.close()
+                error_msg = f"NFC tag not found: {tag_id}"
+                print(f"Error: {error_msg}")
+                return jsonify({"status": "error", "message": error_msg}), 400
+            
+            user_id = tag_row[0]
+            
+            # Check if attendance already exists for this tag and date
+            c.execute("SELECT id, status FROM attendance WHERE tag_id=? AND date=?", (tag_id, date))
+            existing = c.fetchone()
+            
+            if existing:
+                # Update existing attendance
+                c.execute("UPDATE attendance SET status=?, user_id=? WHERE tag_id=? AND date=?", 
+                         (status, user_id, tag_id, date))
+                log_action("UPDATE", "attendance", f"Tag {tag_id} marked as {status} for {date}")
+                print(f"Updated attendance: Tag {tag_id} marked as {status} for {date}")
+            else:
+                # Insert new attendance record
+                c.execute("INSERT INTO attendance (tag_id, user_id, status, date) VALUES (?, ?, ?, ?)",
+                         (tag_id, user_id, status, date))
+                log_action("INSERT", "attendance", f"Tag {tag_id} marked as {status} for {date}")
+                print(f"Created attendance: Tag {tag_id} marked as {status} for {date}")
+            
+            conn.commit()
+            conn.close()
+        
+        return jsonify({
+            "status": "ok", 
+            "message": f"Attendance marked as {status} for tag {tag_id}",
+            "tag_id": tag_id,
+            "user_id": user_id,
+            "attendance_status": status,
+            "date": date
+        }), 201
+        
+    except Exception as e:
+        print(f"Error marking attendance: {str(e)}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+@app.route("/attendance", methods=["GET"])
+def get_attendance():
+    """Get attendance records with optional filtering."""
+    try:
+        date = request.args.get("date", datetime.date.today().isoformat())
+        user_id = request.args.get("user_id")
+        tag_id = request.args.get("tag_id")
+        
+        conn = get_db_connection()
+        c = conn.cursor()
+        
+        # Build query based on filters
+        query = """
+            SELECT a.id, a.tag_id, a.user_id, u.name, u.email, a.status, a.date, a.created_at, a.updated_at 
+            FROM attendance a 
+            LEFT JOIN users u ON a.user_id = u.id 
+            WHERE 1=1
+        """
+        params = []
+        
+        if date:
+            query += " AND a.date = ?"
+            params.append(date)
+        
+        if user_id:
+            query += " AND a.user_id = ?"
+            params.append(user_id)
+            
+        if tag_id:
+            query += " AND a.tag_id = ?"
+            params.append(tag_id)
+        
+        query += " ORDER BY a.created_at DESC"
+        
+        c.execute(query, params)
+        rows = c.fetchall()
+        conn.close()
+        
+        return jsonify([{
+            "id": r[0],
+            "tag_id": r[1], 
+            "user_id": r[2],
+            "user_name": r[3],
+            "user_email": r[4],
+            "status": r[5],
+            "date": r[6],
+            "created_at": r[7],
+            "updated_at": r[8]
+        } for r in rows])
+        
+    except Exception as e:
+        print(f"Error getting attendance: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+@app.route("/attendance/<int:attendance_id>", methods=["DELETE"])
+def delete_attendance(attendance_id):
+    """Delete an attendance record."""
+    try:
+        with db_lock:
+            conn = get_db_connection()
+            c = conn.cursor()
+            c.execute("DELETE FROM attendance WHERE id=?", (attendance_id,))
+            if c.rowcount == 0:
+                conn.close()
+                return jsonify({"status": "error", "message": "Attendance record not found"}), 404
+            conn.commit()
+            conn.close()
+        
+        log_action("DELETE", "attendance", f"Attendance record {attendance_id} deleted")
+        return jsonify({"status": "ok"})
+    except Exception as e:
+        print(f"Error deleting attendance: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 # --- AUDIT LOGS ---
 @app.route("/audit", methods=["GET"])
