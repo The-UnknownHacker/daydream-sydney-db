@@ -9,7 +9,7 @@ import threading
 
 app = Flask(__name__)
 
-# Database connection with retry logic and timeout
+
 def get_db_connection(timeout=30.0, retries=3):
     """Get a database connection with retry logic and prope@app.route("/stars/<star_id>", methods=["DELETE"])
 def delete_star(star_id):
@@ -32,32 +32,27 @@ def delete_star(star_id):
     for attempt in range(retries):
         try:
             conn = sqlite3.connect(DB_FILE, timeout=timeout)
-            # Enable WAL mode for better concurrent access
             conn.execute('PRAGMA journal_mode=WAL;')
-            # Set busy timeout
             conn.execute(f'PRAGMA busy_timeout={int(timeout * 1000)};')
             return conn
         except sqlite3.OperationalError as e:
             if "database is locked" in str(e).lower() and attempt < retries - 1:
                 print(f"Database locked, retrying in {0.1 * (attempt + 1)} seconds... (attempt {attempt + 1}/{retries})")
-                time.sleep(0.1 * (attempt + 1))  # Exponential backoff
+                time.sleep(0.1 * (attempt + 1)) 
                 continue
             raise e
     raise sqlite3.OperationalError("Failed to get database connection after retries")
 
-# Thread lock for critical database operations
 db_lock = threading.Lock()
 
-# Configure CORS more explicitly
 cors = CORS(app, resources={
     r"/*": {
-        "origins": "*",  # Allow all origins (development mode)
+        "origins": "*", 
         "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
         "allow_headers": ["Content-Type", "Authorization", "Accept"]
     }
 })
 
-# Add CORS headers to all responses
 @app.after_request
 def add_cors_headers(response):
     response.headers['Access-Control-Allow-Origin'] = '*'
@@ -67,7 +62,6 @@ def add_cors_headers(response):
 
 DB_FILE = "daydream_sydney.db"
 
-# Global error handling
 @app.errorhandler(404)
 def not_found(error):
     return jsonify({"status": "error", "message": "Resource not found"}), 404
@@ -82,13 +76,11 @@ def handle_exception(e):
     print(traceback.format_exc())
     return jsonify({"status": "error", "message": "An unexpected error occurred"}), 500
 
-# --- Initialize DB with schema ---
 def init_db():
     with db_lock:
         conn = get_db_connection()
         c = conn.cursor()
 
-        # Audit logs
         c.execute('''
             CREATE TABLE IF NOT EXISTS audit_logs (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -99,7 +91,6 @@ def init_db():
             )
         ''')
 
-        # Users table
         c.execute('''
             CREATE TABLE IF NOT EXISTS users (
                 id TEXT PRIMARY KEY,
@@ -110,7 +101,6 @@ def init_db():
             )
         ''')
 
-        # Trigger for users.updated_at
         c.execute('''
             CREATE TRIGGER IF NOT EXISTS users_updated_at
             AFTER UPDATE ON users
@@ -119,7 +109,6 @@ def init_db():
             END;
         ''')
 
-        # Stars table
         c.execute('''
             CREATE TABLE IF NOT EXISTS stars (
                 id TEXT PRIMARY KEY,
@@ -129,7 +118,6 @@ def init_db():
             )
         ''')
 
-        # NFC Tags table
         c.execute('''
             CREATE TABLE IF NOT EXISTS nfc_tags (
                 tag_id TEXT PRIMARY KEY,
@@ -140,7 +128,6 @@ def init_db():
             )
         ''')
 
-        # Trigger for nfc_tags.updated_at
         c.execute('''
             CREATE TRIGGER IF NOT EXISTS nfc_tags_updated_at
             AFTER UPDATE ON nfc_tags
@@ -149,10 +136,34 @@ def init_db():
             END;
         ''')
 
-        # Indexes
+        c.execute('''
+            CREATE TABLE IF NOT EXISTS attendance (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                tag_id TEXT NOT NULL,
+                user_id TEXT,
+                status TEXT NOT NULL DEFAULT 'absent',
+                date TEXT NOT NULL DEFAULT (DATE('now')),
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+                FOREIGN KEY (tag_id) REFERENCES nfc_tags(tag_id) ON DELETE CASCADE,
+                UNIQUE(tag_id, date)
+            )
+        ''')
+
+        c.execute('''
+            CREATE TRIGGER IF NOT EXISTS attendance_updated_at
+            AFTER UPDATE ON attendance
+            BEGIN
+                UPDATE attendance SET updated_at = CURRENT_TIMESTAMP WHERE id = NEW.id;
+            END;
+        ''')
+
         c.execute('CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)')
         c.execute('CREATE INDEX IF NOT EXISTS idx_stars_user_created ON stars(user_id, created_at)')
         c.execute('CREATE INDEX IF NOT EXISTS idx_nfc_tags_user ON nfc_tags(user_id)')
+        c.execute('CREATE INDEX IF NOT EXISTS idx_attendance_tag_date ON attendance(tag_id, date)')
+        c.execute('CREATE INDEX IF NOT EXISTS idx_attendance_user_date ON attendance(user_id, date)')
 
         conn.commit()
         conn.close()
@@ -169,34 +180,28 @@ def log_action(action, table, details=""):
             conn.close()
     except Exception as e:
         print(f"Warning: Failed to log action {action} on {table}: {e}")
-        # Don't fail the main operation if logging fails
 
-# Function to add sample data if tables are empty
 def populate_sample_data():
     with db_lock:
         conn = get_db_connection()
         c = conn.cursor()
         
-        # Check if users table is empty
         c.execute("SELECT COUNT(*) FROM users")
         user_count = c.fetchone()[0]
         
         if user_count == 0:
             print("Adding sample users...")
-            # Add a sample user
-            sample_user_id = "8472A92D-C6D5-4014-82FE-9D47348DAE24"  # This matches the ID in your logs
+            sample_user_id = "8472A92D-C6D5-4014-82FE-9D47348DAE24" 
             c.execute("INSERT INTO users (id, name, email) VALUES (?, ?, ?)",
                       (sample_user_id, "Sample User", "sample@example.com"))
             
-            # Add some sample stars for this user
             for i in range(5):
                 star_id = f"star_{i}_{sample_user_id[:8]}"
                 c.execute("INSERT INTO stars (id, user_id) VALUES (?, ?)",
                           (star_id, sample_user_id))
             
-            # Add a sample NFC tag linked to this user
             c.execute("INSERT INTO nfc_tags (tag_id, user_id) VALUES (?, ?)",
-                      ("04BC777A7B1190", sample_user_id))  # This matches the NFC tag ID in your logs
+                      ("04BC777A7B1190", sample_user_id))  
             
             conn.commit()
             print("Sample data added successfully")
@@ -206,15 +211,12 @@ def populate_sample_data():
 init_db()
 populate_sample_data()
 
-# --- USERS ---
 @app.route("/users", methods=["POST"])
 def create_user():
     data = request.json
     try:
-        # Log the incoming data for debugging
         print(f"Create user request received: {data}")
         
-        # Check if all required fields are present
         required_fields = ["id", "name", "email"]
         for field in required_fields:
             if field not in data:
@@ -225,7 +227,6 @@ def create_user():
         conn = sqlite3.connect(DB_FILE)
         c = conn.cursor()
         
-        # Check if email already exists
         c.execute("SELECT id FROM users WHERE email=?", (data["email"],))
         existing_user = c.fetchone()
         if existing_user:
@@ -234,12 +235,10 @@ def create_user():
             print(error_msg)
             return jsonify({"status": "error", "message": error_msg}), 400
         
-        # Insert the new user
         c.execute("INSERT INTO users (id, name, email) VALUES (?, ?, ?)",
                   (data["id"], data["name"], data["email"]))
         conn.commit()
         
-        # Fetch the created user to return
         c.execute("SELECT id, name, email, created_at, updated_at FROM users WHERE id=?", (data["id"],))
         user = c.fetchone()
         conn.close()
@@ -247,7 +246,6 @@ def create_user():
         log_action("INSERT", "users", f"User {data['id']} created")
         print(f"User created successfully: {data['id']}")
         
-        # Return the created user object
         return jsonify({"id": user[0], "name": user[1], "email": user[2], 
                         "created_at": user[3], "updated_at": user[4]}), 201
     except Exception as e:
@@ -287,7 +285,6 @@ def update_user(user_id):
             return jsonify({"status": "error", "message": "User not found"}), 404
         conn.commit()
         
-        # Fetch the updated user
         c.execute("SELECT id, name, email, created_at, updated_at FROM users WHERE id=?", (user_id,))
         row = c.fetchone()
         conn.close()
@@ -297,14 +294,12 @@ def update_user(user_id):
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 400
 
-# --- STARS ---
 @app.route("/stars", methods=["POST"])
 def create_star():
     data = request.json
     try:
         print(f"Creating star: {data}")
         
-        # Validate required fields
         if not data or "id" not in data or "user_id" not in data:
             error_msg = "Missing required fields: id and user_id"
             print(f"Error: {error_msg}")
@@ -317,7 +312,6 @@ def create_star():
             conn = get_db_connection()
             c = conn.cursor()
             
-            # Check if user exists first
             c.execute("SELECT id FROM users WHERE id=?", (user_id,))
             if not c.fetchone():
                 conn.close()
@@ -325,19 +319,16 @@ def create_star():
                 print(f"Error: {error_msg}")
                 return jsonify({"status": "error", "message": error_msg}), 400
             
-            # Check if star already exists
             c.execute("SELECT id FROM stars WHERE id=?", (star_id,))
             if c.fetchone():
                 conn.close()
                 print(f"Star {star_id} already exists")
                 return jsonify({"status": "ok", "message": "Star already exists"}), 200
             
-            # Insert the star
             c.execute("INSERT INTO stars (id, user_id) VALUES (?, ?)", (star_id, user_id))
             conn.commit()
             conn.close()
             
-        # Log action (separate connection with error handling)
         log_action("INSERT", "stars", f"Star {star_id} for user {user_id}")
         print(f"Successfully created star {star_id} for user {user_id}")
         return jsonify({"status": "ok"}), 201
@@ -366,7 +357,6 @@ def list_user_stars(user_id):
 
 @app.route("/stars/<user_id>", methods=["GET"])
 def list_stars(user_id):
-    # Keep the old endpoint for backward compatibility
     return list_user_stars(user_id)
 
 @app.route("/stars/<star_id>", methods=["DELETE"])
@@ -382,7 +372,6 @@ def delete_star(star_id):
     log_action("DELETE", "stars", f"Star {star_id} deleted")
     return jsonify({"status": "ok"})
 
-# Add endpoint to get a specific star
 @app.route("/stars/<star_id>", methods=["GET"])
 def get_star(star_id):
     try:
@@ -415,21 +404,17 @@ def delete_user_stars(user_id):
         print(f"Error deleting user stars: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
-# --- NFC TAGS ---
 @app.route("/nfc", methods=["POST"])
 def create_nfc():
     data = request.json
     try:
-        # Log the incoming request for debugging
         print(f"NFC link request received: {data}")
         
-        # Validate the request data
         if not data:
             error_msg = "No JSON data provided"
             print(f"Error: {error_msg}")
             return jsonify({"status": "error", "message": error_msg}), 400
         
-        # Check for required fields
         if "tag_id" not in data or not data["tag_id"]:
             error_msg = "Missing or empty tag_id field"
             print(f"Error: {error_msg}")
@@ -448,7 +433,6 @@ def create_nfc():
         conn = sqlite3.connect(DB_FILE)
         c = conn.cursor()
         
-        # Check if user exists
         c.execute("SELECT id FROM users WHERE id=?", (user_id,))
         if not c.fetchone():
             conn.close()
@@ -456,7 +440,6 @@ def create_nfc():
             print(f"Error: {error_msg}")
             return jsonify({"status": "error", "message": error_msg}), 400
         
-        # Check if tag is already linked to another user
         c.execute("SELECT user_id FROM nfc_tags WHERE tag_id=?", (tag_id,))
         existing_link = c.fetchone()
         if existing_link:
@@ -470,7 +453,6 @@ def create_nfc():
                 print(f"Error: {error_msg}")
                 return jsonify({"status": "error", "message": error_msg}), 400
         
-        # Insert the new NFC tag link
         c.execute("INSERT INTO nfc_tags (tag_id, user_id) VALUES (?, ?)", (tag_id, user_id))
         conn.commit()
         conn.close()
@@ -494,7 +476,6 @@ def list_user_nfc(user_id):
 
 @app.route("/nfc/<user_id>", methods=["GET"])
 def list_nfc(user_id):
-    # Keep the old endpoint for backward compatibility
     return list_user_nfc(user_id)
 
 @app.route("/nfc/<tag_id>", methods=["DELETE"])
@@ -510,7 +491,6 @@ def unlink_nfc(tag_id):
     log_action("DELETE", "nfc_tags", f"Tag {tag_id} unlinked")
     return jsonify({"status": "ok"})
 
-# Add endpoint to get a specific NFC tag
 @app.route("/nfc/<tag_id>", methods=["GET"])
 def get_nfc_tag(tag_id):
     conn = sqlite3.connect(DB_FILE)
@@ -550,7 +530,144 @@ def get_user_by_nfc(tag_id):
     print(f"Returning user details for ID: {user_id}")
     return jsonify({"id": user[0], "name": user[1], "email": user[2], "created_at": user[3], "updated_at": user[4]})
 
-# --- AUDIT LOGS ---
+@app.route("/attendance", methods=["POST"])
+def mark_attendance():
+    """Mark attendance for a user via NFC tag. Default is absent."""
+    data = request.json
+    try:
+        print(f"Attendance request received: {data}")
+        
+        if not data or "tag_id" not in data:
+            error_msg = "Missing required field: tag_id"
+            print(f"Error: {error_msg}")
+            return jsonify({"status": "error", "message": error_msg}), 400
+        
+        tag_id = data["tag_id"]
+        status = data.get("status", "absent")  
+        date = data.get("date", datetime.date.today().isoformat())  
+        
+        if status not in ["present", "absent"]:
+            error_msg = "Status must be 'present' or 'absent'"
+            print(f"Error: {error_msg}")
+            return jsonify({"status": "error", "message": error_msg}), 400
+        
+        with db_lock:
+            conn = get_db_connection()
+            c = conn.cursor()
+            
+            c.execute("SELECT user_id FROM nfc_tags WHERE tag_id=?", (tag_id,))
+            tag_row = c.fetchone()
+            if not tag_row:
+                conn.close()
+                error_msg = f"NFC tag not found: {tag_id}"
+                print(f"Error: {error_msg}")
+                return jsonify({"status": "error", "message": error_msg}), 400
+            
+            user_id = tag_row[0]
+            
+            c.execute("SELECT id, status FROM attendance WHERE tag_id=? AND date=?", (tag_id, date))
+            existing = c.fetchone()
+            
+            if existing:
+                c.execute("UPDATE attendance SET status=?, user_id=? WHERE tag_id=? AND date=?", 
+                         (status, user_id, tag_id, date))
+                log_action("UPDATE", "attendance", f"Tag {tag_id} marked as {status} for {date}")
+                print(f"Updated attendance: Tag {tag_id} marked as {status} for {date}")
+            else:
+                c.execute("INSERT INTO attendance (tag_id, user_id, status, date) VALUES (?, ?, ?, ?)",
+                         (tag_id, user_id, status, date))
+                log_action("INSERT", "attendance", f"Tag {tag_id} marked as {status} for {date}")
+                print(f"Created attendance: Tag {tag_id} marked as {status} for {date}")
+            
+            conn.commit()
+            conn.close()
+        
+        return jsonify({
+            "status": "ok", 
+            "message": f"Attendance marked as {status} for tag {tag_id}",
+            "tag_id": tag_id,
+            "user_id": user_id,
+            "attendance_status": status,
+            "date": date
+        }), 201
+        
+    except Exception as e:
+        print(f"Error marking attendance: {str(e)}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+@app.route("/attendance", methods=["GET"])
+def get_attendance():
+    """Get attendance records with optional filtering."""
+    try:
+        date = request.args.get("date", datetime.date.today().isoformat())
+        user_id = request.args.get("user_id")
+        tag_id = request.args.get("tag_id")
+        
+        conn = get_db_connection()
+        c = conn.cursor()
+        
+        query = """
+            SELECT a.id, a.tag_id, a.user_id, u.name, u.email, a.status, a.date, a.created_at, a.updated_at 
+            FROM attendance a 
+            LEFT JOIN users u ON a.user_id = u.id 
+            WHERE 1=1
+        """
+        params = []
+        
+        if date:
+            query += " AND a.date = ?"
+            params.append(date)
+        
+        if user_id:
+            query += " AND a.user_id = ?"
+            params.append(user_id)
+            
+        if tag_id:
+            query += " AND a.tag_id = ?"
+            params.append(tag_id)
+        
+        query += " ORDER BY a.created_at DESC"
+        
+        c.execute(query, params)
+        rows = c.fetchall()
+        conn.close()
+        
+        return jsonify([{
+            "id": r[0],
+            "tag_id": r[1], 
+            "user_id": r[2],
+            "user_name": r[3],
+            "user_email": r[4],
+            "status": r[5],
+            "date": r[6],
+            "created_at": r[7],
+            "updated_at": r[8]
+        } for r in rows])
+        
+    except Exception as e:
+        print(f"Error getting attendance: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+@app.route("/attendance/<int:attendance_id>", methods=["DELETE"])
+def delete_attendance(attendance_id):
+    """Delete an attendance record."""
+    try:
+        with db_lock:
+            conn = get_db_connection()
+            c = conn.cursor()
+            c.execute("DELETE FROM attendance WHERE id=?", (attendance_id,))
+            if c.rowcount == 0:
+                conn.close()
+                return jsonify({"status": "error", "message": "Attendance record not found"}), 404
+            conn.commit()
+            conn.close()
+        
+        log_action("DELETE", "attendance", f"Attendance record {attendance_id} deleted")
+        return jsonify({"status": "ok"})
+    except Exception as e:
+        print(f"Error deleting attendance: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
 @app.route("/audit", methods=["GET"])
 def audit():
     conn = sqlite3.connect(DB_FILE)
@@ -560,14 +677,12 @@ def audit():
     conn.close()
     return jsonify([{"id": r[0], "action": r[1], "table": r[2], "details": r[3], "timestamp": r[4]} for r in rows])
 
-# Add DELETE endpoint for user
 @app.route("/users/<user_id>", methods=["DELETE"])
 def delete_user(user_id):
     try:
         conn = sqlite3.connect(DB_FILE)
         c = conn.cursor()
         
-        # First delete dependent records (stars and nfc tags will be deleted by foreign key constraints)
         c.execute("DELETE FROM users WHERE id=?", (user_id,))
         if c.rowcount == 0:
             conn.close()
@@ -580,7 +695,6 @@ def delete_user(user_id):
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 400
 
-# Simple health check endpoint
 @app.route("/health", methods=["GET"])
 def health_check():
     return jsonify({
